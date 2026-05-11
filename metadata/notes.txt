@@ -1,0 +1,11 @@
+# Create new environment with compatible Python
+conda create -n yolo_env python=3.11 -y
+conda activate yolo_env
+
+# Install PyTorch with CUDA
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# Install YOLO
+pip install ultralytics opencv-python
+
+pip install ipykernel
