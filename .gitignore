@@ -2,3 +2,6 @@
 
 __pycache__/
 venv/
+
+data/logs/query_log.jsonl
+data/logs/query_log.jsonl

@@ -50,9 +50,9 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DB_PATH         = Path("../../data/db/chroma")
+DB_PATH         = Path("../data/db/chroma")
 COLLECTION_NAME = "taxes_az_qa"
-LOG_PATH        = Path("../../data/logs/query_log.jsonl")
+LOG_PATH        = Path("../data/logs/query_log.jsonl")
 
 EMBED_MODEL      = "intfloat/multilingual-e5-large"
 E5_QUERY_PREFIX  = "query: "
