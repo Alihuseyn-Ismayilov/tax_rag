@@ -12,6 +12,20 @@ guessing.
 > **Research purpose only.** This is not an official service of the State Tax Service,
 > and its answers are not legal or tax advice. Always check the linked source.
 
+![Asking a question: retrieval, answer with numbered sources, and the project panel](docs/screenshots/demo.gif)
+
+<sub>Recorded from the running app with the real index and Gemini, no edits to the answer.</sub>
+
+| Start screen | Answer with sources |
+|---|---|
+| ![Start screen with topic cards](docs/screenshots/home.png) | ![Answer with footnotes; hovering footnote 1 highlights source 1](docs/screenshots/answer.png) |
+| **Dark theme** | **Project panel** |
+| ![The same answer in the dark theme](docs/screenshots/answer-dark.png) | ![Info panel with model settings and the pipeline](docs/screenshots/about.png) |
+
+<p align="center">
+  <img src="docs/screenshots/mobile-home.png" alt="Start screen on a phone" width="300">
+</p>
+
 ---
 
 ## How it works
@@ -40,14 +54,20 @@ thinking disabled. The system prompt (Azerbaijani) tells the model to answer onl
 Azerbaijani, only from the context, to cite sources and to keep Tax Code references.
 
 The web UI has the same diagram under **Layihə haqqında** (top right), filled with the
-live settings from the server.
+live settings from the server:
+
+<p align="center">
+  <img src="docs/screenshots/about-pipeline.png" alt="Pipeline diagram in the project panel" width="720">
+</p>
 
 ---
 
 ## Quick start
 
 The ChromaDB index is committed in `data/db/chroma`, so you can run the app without
-rebuilding anything.
+rebuilding anything. It currently holds 3,558 vectors: 9 more than the current
+`chunks_embedded.json` (3,549), left over from an earlier build. Rebuilding the index
+(below) brings the two back in sync.
 
 **Requirements:** Python 3.11, a [Gemini API key](https://aistudio.google.com/apikey),
 about 2.2 GB free disk for the embedding model (downloaded on first start).

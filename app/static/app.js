@@ -83,12 +83,19 @@ function setDrawer(open, returnFocus = false) {
 
 async function loadHistory() {
   try {
-    const data = await (await fetch('/history?n=30')).json();
-    const qs = data.queries || [];
+    const data = await (await fetch("/history?n=60")).json();
+    // Newest first; show each question once even if it was asked repeatedly.
+    const seen = new Set();
+    const qs = (data.queries || []).filter((e) => {
+      const key = e.query.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     historyList.innerHTML = '';
     qs.forEach((e) => {
       const li = document.createElement('li');
-      li.innerHTML = `<button type="button" class="register-item">${esc(e.query)}</button>`;
+      li.innerHTML = `<button type="button" class="register-item"><span>${esc(e.query)}</span></button>`;
       li.querySelector('button').onclick = () => {
         setQuery(e.query);
         setDrawer(false);

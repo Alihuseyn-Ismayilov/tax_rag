@@ -127,10 +127,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   scrollbar-color: rgba(255,255,255,.15) transparent;
 }
 .register-item {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  display: block;
   width: 100%;
   text-align: left;
   padding: 8px 12px;
@@ -141,6 +138,13 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   transition: background .15s, color .15s;
 }
 .register-item:hover { background: var(--side-hover); color: var(--side-ink); }
+/* clamp the inner span, not the padded button, so no sliver of line 3 shows */
+.register-item span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 .register-foot {
   padding: 16px 24px;
