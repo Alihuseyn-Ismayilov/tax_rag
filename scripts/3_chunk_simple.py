@@ -57,6 +57,12 @@ def make_chunk(row: pd.Series, chunk_text: str) -> dict:
         "chunk_text":    chunk_text,       # what gets embedded
         "question":      row["question"].strip(),
         "answer":        row["answer"].strip(),
+        
+        # ── Name Surname and Email  ──────────────────────────────────────────────
+        
+        "name":         row["name"].strip(),      
+        "email":        row["email"].strip(),
+            
 
         # ── Identity & traceability ────────────────────────────────────────
         "source_id":     int(row["id"]),   # original row ID from taxes.gov.az

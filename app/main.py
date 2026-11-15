@@ -1,15 +1,15 @@
 """
-7_app.py
---------
-FastAPI web frontend for the taxes.gov.az RAG chatbot.
+main.py
+-------
+FastAPI web app for the taxes.gov.az RAG chatbot (Vergi Köməkçisi).
 
-Run:
-    uvicorn 7_app:app --reload --port 8000
+Run from the app/ folder (data paths are relative):
+    uvicorn main:app --reload --port 8000
 
 Then open: http://localhost:8000
 
 Structure:
-    7_app.py              ← this file (FastAPI routes)
+    main.py               ← this file (FastAPI routes)
     templates/index.html  ← Jinja2 chat UI
     static/style.css      ← styles
     static/app.js         ← frontend logic
@@ -19,6 +19,7 @@ Routes:
     POST /ask       → query endpoint (JSON in, JSON out)
     GET  /history   → last N queries from query_log.jsonl
     GET  /health    → DB + model status check
+    GET  /about     → read-only settings for the UI info panel
 """
 
 import json
@@ -124,6 +125,8 @@ class Source(BaseModel):
     answer_date: str
     question:    str
     answer:      str
+    name:        str
+    email:       str
     source_url:  str
 
 
@@ -163,6 +166,8 @@ def search(query: str) -> list[dict]:
             "distance":    round(distance, 4),
             "similarity":  round(1 - distance / 2, 4),
             "source_id":   meta["source_id"],
+            "name":        meta["name"],
+            "email":       meta["email"],
             "chunk_type":  meta["chunk_type"],
             "answer_date": meta["answer_date"],
             "read_count":  meta["read_count"],
@@ -312,3 +317,20 @@ async def health():
         "ts":          datetime.now(timezone.utc).isoformat(),
     }
     return JSONResponse(content=status)
+
+@app.get("/about")
+async def about():
+    """Read-only project facts for the UI's info panel (no secrets)."""
+    return JSONResponse(content={
+        "llm_model":          GEMINI_MODEL,
+        "embed_model":        EMBED_MODEL,
+        "embed_dim":          embed_model.get_sentence_embedding_dimension() if embed_model else None,
+        "collection":         COLLECTION_NAME,
+        "db_docs":            collection.count() if collection else 0,
+        "distance":           "cosine",
+        "top_k":              TOP_K,
+        "distance_threshold": DISTANCE_THRESHOLD,
+        "temperature":        TEMPERATURE,
+        "max_output_tokens":  MAX_OUTPUT_TOKENS,
+        "source":             "https://www.taxes.gov.az/az/page/suallar-ve-cavablar",
+    })

@@ -1,272 +1,295 @@
-/* app.js — Vergi Chatbotu frontend logic */
+/* app.js — Vergi Köməkçisi frontend */
 
-const chatMessages  = document.getElementById('chat-messages');
-const emptyState    = document.getElementById('empty-state');
-const queryInput    = document.getElementById('query-input');
-const sendBtn       = document.getElementById('send-btn');
-const historyList   = document.getElementById('history-list');
-const dbCount       = document.getElementById('db-count');
-const statusDot     = document.getElementById('status-dot');
-const statusText    = document.getElementById('status-text');
+const $ = (id) => document.getElementById(id);
 
-let isLoading = false;
+const scroller    = $('sheet-scroll');
+const entries     = $('chat-messages');
+const cover       = $('empty-state');
+const form        = $('composer');
+const input       = $('query-input');
+const sendBtn     = $('send-btn');
+const historyList = $('history-list');
 
-// ── On load ───────────────────────────────────────────────
+let busy = false;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const scrollMode = () => (reduceMotion.matches ? 'auto' : 'smooth');
+const announce = (msg) => { const a = $('announcer'); a.textContent = ''; setTimeout(() => (a.textContent = msg), 50); };
+let counter = 0;          // unique id per entry (for note anchors)
+
+// ── Boot ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  checkHealth();
   loadHistory();
-  autoResize(queryInput);
-});
+  autoResize();
 
-// ── Health check ──────────────────────────────────────────
-async function checkHealth() {
-  try {
-    const res  = await fetch('/health');
-    const data = await res.json();
+  document.querySelectorAll('.topic').forEach((b) =>
+    b.addEventListener('click', () => { setQuery(b.dataset.q); send(); })
+  );
 
-    dbCount.textContent = data.db_docs.toLocaleString() + ' sənəd';
-
-    const dot  = statusDot.querySelector('.dot');
-    dot.className = 'dot dot--ok';
-    statusText.textContent = 'Hazır';
-  } catch (e) {
-    const dot = statusDot.querySelector('.dot');
-    dot.className = 'dot dot--error';
-    statusText.textContent = 'Xəta';
-  }
-}
-
-// ── History ───────────────────────────────────────────────
-async function loadHistory() {
-  try {
-    const res  = await fetch('/history?n=20');
-    const data = await res.json();
-
-    if (!data.queries || data.queries.length === 0) return;
-
-    historyList.innerHTML = '';
-    data.queries.forEach(entry => {
-      const item = document.createElement('div');
-      item.className = 'history-item';
-      item.innerHTML = `
-        <div class="history-query">${escapeHtml(entry.query)}</div>
-        <div class="history-meta">${entry.retrieval_ms}ms + ${entry.llm_ms}ms</div>
-      `;
-      item.onclick = () => fillQueryText(entry.query);
-      historyList.appendChild(item);
-    });
-  } catch (e) {
-    // silently fail — history is non-critical
-  }
-}
-
-// ── Input handling ────────────────────────────────────────
-queryInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  $('brand').addEventListener('click', (e) => {
+    // Plain click returns to the start screen in place; Ctrl/Cmd-click still opens a new tab.
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault();
-    if (!isLoading) sendQuery();
-  }
-});
-
-queryInput.addEventListener('input', () => autoResize(queryInput));
-
-function autoResize(el) {
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
-}
-
-function fillQuery(btn) {
-  queryInput.value = btn.textContent;
-  autoResize(queryInput);
-  queryInput.focus();
-}
-
-function fillQueryText(text) {
-  queryInput.value = text;
-  autoResize(queryInput);
-  queryInput.focus();
-}
-
-// ── Send query ────────────────────────────────────────────
-async function sendQuery() {
-  const query = queryInput.value.trim();
-  if (!query || isLoading) return;
-
-  // Hide empty state on first message
-  emptyState.style.display = 'none';
-
-  // Lock input
-  isLoading = true;
-  sendBtn.disabled = true;
-  queryInput.value = '';
-  autoResize(queryInput);
-
-  // Add user bubble
-  appendMessage('user', query);
-
-  // Add loading bubble
-  const loadingId = 'loading-' + Date.now();
-  appendLoading(loadingId);
-
-  try {
-    const res  = await fetch('/ask', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ query }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Server error');
-    }
-
-    const data = await res.json();
-
-    // Remove loading bubble
-    document.getElementById(loadingId)?.remove();
-
-    // Add bot answer
-    appendBotMessage(data);
-
-    // Refresh history sidebar
-    loadHistory();
-
-  } catch (e) {
-    document.getElementById(loadingId)?.remove();
-    appendMessage('bot', `⚠️ Xəta: ${e.message}`);
-  } finally {
-    isLoading = false;
-    sendBtn.disabled = false;
-    queryInput.focus();
-  }
-}
-
-// ── DOM helpers ───────────────────────────────────────────
-function appendMessage(role, text) {
-  const div = document.createElement('div');
-  div.className = `message message--${role}`;
-  div.innerHTML = `
-    <div class="message-bubble">${role === 'bot' ? formatText(text) : escapeHtml(text)}</div>
-  `;
-  chatMessages.appendChild(div);
-  scrollToBottom();
-}
-
-function appendLoading(id) {
-  const div = document.createElement('div');
-  div.id        = id;
-  div.className = 'message message--bot';
-  div.innerHTML = `
-    <div class="message-bubble message-bubble--loading">
-      <span class="typing-dot"></span>
-      <span class="typing-dot"></span>
-      <span class="typing-dot"></span>
-    </div>
-  `;
-  chatMessages.appendChild(div);
-  scrollToBottom();
-}
-
-function appendBotMessage(data) {
-  const div = document.createElement('div');
-  div.className = 'message message--bot';
-
-  // Answer bubble
-  const bubble = document.createElement('div');
-  bubble.className = 'message-bubble';
-  bubble.innerHTML = formatText(data.answer);
-  div.appendChild(bubble);
-
-  // Sources panel
-  if (data.sources && data.sources.length > 0) {
-    const panel = buildSourcesPanel(data.sources);
-    div.appendChild(panel);
-  }
-
-  // Timing bar
-  const timing = document.createElement('div');
-  timing.className = 'timing-bar';
-  timing.innerHTML = `
-    <span class="timing-item">
-      <span class="timing-label">retrieval</span>
-      <span class="timing-val">${Math.round(data.retrieval_ms)}ms</span>
-    </span>
-    <span class="timing-item">
-      <span class="timing-label">llm</span>
-      <span class="timing-val">${Math.round(data.llm_ms)}ms</span>
-    </span>
-    <span class="timing-item">
-      <span class="timing-label">mənbə</span>
-      <span class="timing-val">${data.sources.length}</span>
-    </span>
-  `;
-  div.appendChild(timing);
-
-  chatMessages.appendChild(div);
-  scrollToBottom();
-}
-
-function buildSourcesPanel(sources) {
-  const panel = document.createElement('div');
-  panel.className = 'sources-panel';
-
-  const toggle = document.createElement('button');
-  toggle.className = 'sources-toggle';
-  toggle.innerHTML = `
-    <span>${sources.length} mənbə tapıldı</span>
-    <span class="arrow">▼</span>
-  `;
-
-  const content = document.createElement('div');
-  content.className = 'sources-content';
-
-  sources.forEach(s => {
-    const item = document.createElement('div');
-    item.className = 'source-item';
-    item.innerHTML = `
-      <div class="source-header">
-        <span class="source-rank">#${s.rank}</span>
-        <span class="source-sim">${Math.round(s.similarity * 100)}% uyğun</span>
-        <span class="source-date">${s.answer_date}</span>
-      </div>
-      <div class="source-q">${escapeHtml(s.question)}</div>
-      <div class="source-a">${escapeHtml(s.answer)}</div>
-    `;
-    content.appendChild(item);
+    goHome();
   });
 
-  toggle.onclick = () => {
-    const isOpen = content.classList.toggle('open');
-    toggle.classList.toggle('open', isOpen);
+  $('register-toggle').addEventListener('click', () => setDrawer(!document.body.classList.contains('register-open')));
+  $('register-scrim').addEventListener('click', () => setDrawer(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.body.classList.contains('register-open')) setDrawer(false, true);
+  });
+
+  // About panel: native <dialog> gives focus trapping and Esc-to-close for free.
+  const about = $('about');
+  $('about-toggle').addEventListener('click', () => { loadAbout(); about.showModal(); });
+  $('about-close').addEventListener('click', () => about.close());
+  about.addEventListener('click', (e) => { if (e.target === about) about.close(); });   // backdrop
+});
+
+// Fill the panel with live config from the server; the HTML defaults stay if it fails.
+let aboutLoaded = false;
+async function loadAbout() {
+  if (aboutLoaded) return;
+  try {
+    const res = await fetch('/about');
+    if (!res.ok) return;
+    const d = await res.json();
+    const fmt = (k, v) => (k === 'db_docs' ? String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') : String(v));
+    document.querySelectorAll('[data-about]').forEach((el) => {
+      const k = el.dataset.about;
+      if (d[k] !== undefined && d[k] !== null) el.textContent = fmt(k, d[k]);
+    });
+    aboutLoaded = true;
+  } catch { /* keep defaults */ }
+}
+
+// Back to the start screen: clear the conversation, show the cover, scroll to top.
+function goHome() {
+  entries.innerHTML = '';
+  cover.hidden = false;
+  setDrawer(false);
+  input.value = '';
+  autoResize();
+  scroller.scrollTo({ top: 0, behavior: scrollMode() });
+  input.focus();
+  announce('Əsas səhifə.');
+}
+
+function setDrawer(open, returnFocus = false) {
+  document.body.classList.toggle('register-open', open);
+  $('register-toggle').setAttribute('aria-expanded', String(open));
+  if (open) historyList.querySelector('button')?.focus();
+  else if (returnFocus) $('register-toggle').focus();
+}
+
+async function loadHistory() {
+  try {
+    const data = await (await fetch('/history?n=30')).json();
+    const qs = data.queries || [];
+    historyList.innerHTML = '';
+    qs.forEach((e) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<button type="button" class="register-item">${esc(e.query)}</button>`;
+      li.querySelector('button').onclick = () => {
+        setQuery(e.query);
+        setDrawer(false);
+      };
+      historyList.appendChild(li);
+    });
+  } catch { /* history is optional */ }
+}
+
+// ── Composer ──────────────────────────────────────────────
+input.addEventListener('keydown', (e) => {
+  // Don't submit while an IME is still composing (e.g. Turkish/Azeri layouts with dead keys).
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+  e.preventDefault();
+  if (!e.repeat) send();
+});
+input.addEventListener('input', autoResize);
+form.addEventListener('submit', (e) => { e.preventDefault(); send(); });
+
+function autoResize() {
+  input.style.height = 'auto';
+  const h = input.scrollHeight + 1;   // +1 for the bottom rule
+  input.style.height = Math.min(h, 180) + 'px';
+  input.style.overflowY = h > 180 ? 'auto' : 'hidden';
+}
+function setQuery(text) { input.value = text; autoResize(); input.focus(); }
+
+// ── Ask ───────────────────────────────────────────────────
+async function send() {
+  const query = input.value.trim();
+  if (!query || busy) return;
+
+  busy = true;
+  sendBtn.disabled = true;
+  cover.hidden = true;
+  input.value = '';
+  autoResize();
+
+  counter += 1;
+  const entry = buildEntry(counter, query);
+  entries.appendChild(entry.el);
+  entry.el.scrollIntoView({ behavior: scrollMode(), block: 'start' });
+  announce('Sorğu göndərildi, cavab hazırlanır.');
+
+  try {
+    const res = await fetch('/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    if (!res.ok) {
+      let msg = 'Server xətası (' + res.status + ')';
+      try { msg = (await res.json()).detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    fillEntry(entry, data);
+    announce(`Cavab hazırdır. ${data.sources?.length || 0} mənbə.`);
+    loadHistory();
+  } catch (err) {
+    entry.answer.innerHTML = `<p class="answer--error">Cavab alınmadı: ${esc(err.message)}</p>`;
+    entry.notes.remove();
+    announce('Xəta: cavab alınmadı.');
+  } finally {
+    entry.el.removeAttribute('aria-busy');
+    busy = false;
+    sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+function buildEntry(no, query) {
+  const el = document.createElement('article');
+  el.className = 'entry';
+  el.dataset.no = no;
+  el.setAttribute('aria-busy', 'true');
+  el.setAttribute('aria-labelledby', `q-${no}`);
+  el.innerHTML = `
+    <h3 class="entry-q" id="q-${no}">${esc(query)}</h3>
+    <div class="reply">
+      <div class="bot"><svg class="bot-star" aria-hidden="true"><use href="#star" /></svg>Köməkçi</div>
+      <div class="answer">
+        <div class="pending" aria-hidden="true">Arxivdə oxşar izahlar axtarılır…</div>
+      </div>
+    </div>
+    <aside class="notes" aria-label="Mənbələr"></aside>`;
+  return {
+    el,
+    answer: el.querySelector('.answer'),
+    notes: el.querySelector('.notes'),
+  };
+}
+
+function fillEntry(entry, data) {
+  const sources = data.sources || [];
+  entry.answer.innerHTML = renderAnswer(data.answer);
+  entry.answer.querySelectorAll(':scope > *').forEach((n, i) => (n.style.animationDelay = i * 90 + 'ms'));
+
+  if (!sources.length) entry.notes.remove();
+  else {
+    entry.notes.insertAdjacentHTML('beforeend', '<div class="notes-head">Mənbələr</div>');
+    sources.forEach((s, i) => entry.notes.appendChild(buildNote(s, i, entry.el.dataset.no)));
+  }
+
+  wireCitations(entry);
+}
+
+function buildNote(s, i, no) {
+  const note = document.createElement('div');
+  note.className = 'note';
+  note.dataset.rank = s.rank;
+  note.id = `n${no}-${s.rank}`;
+  note.tabIndex = -1;
+  note.style.animationDelay = 150 + i * 80 + 'ms';
+  note.innerHTML = `
+    <div class="note-q"><span class="note-no">${s.rank}</span>${esc(s.question)}</div>
+    <div class="note-a">${esc(s.answer)}</div>
+    <button type="button" class="note-more" aria-expanded="false">tam mətn</button>
+    ${s.source_url ? `<a class="note-link" href="${esc(s.source_url)}" target="_blank" rel="noopener">${s.answer_date ? esc(s.answer_date) + ' · ' : ''}orijinal<span class="sr-only"> (yeni pəncərədə)</span></a>` : ''}`;
+
+  const more = note.querySelector('.note-more');
+  const body = note.querySelector('.note-a');
+  requestAnimationFrame(() => { if (body.scrollHeight <= body.clientHeight + 2) more.remove(); });
+  more.onclick = () => {
+    const open = note.classList.toggle('open');
+    more.textContent = open ? 'qısalt' : 'tam mətn';
+    more.setAttribute('aria-expanded', String(open));
+  };
+  return note;
+}
+
+// Footnote markers ↔ margin notes
+function wireCitations(entry) {
+  const find = (r) => entry.notes.querySelector(`.note[data-rank="${r}"]`);
+  entry.answer.querySelectorAll('.cite').forEach((c) => {
+    const note = find(c.dataset.ref);
+    if (!note) { c.replaceWith(document.createTextNode(c.textContent)); return; }
+    c.href = '#' + note.id;
+    c.setAttribute('aria-label', `Mənbə ${c.dataset.ref}`);
+    const on = () => { c.classList.add('on'); note.classList.add('on'); };
+    const off = () => { c.classList.remove('on'); note.classList.remove('on'); };
+    c.addEventListener('mouseenter', on);
+    c.addEventListener('mouseleave', off);
+    c.addEventListener('focus', on);
+    c.addEventListener('blur', off);
+    c.addEventListener('click', (e) => {
+      e.preventDefault();
+      note.scrollIntoView({ behavior: scrollMode(), block: 'center' });
+      note.focus({ preventScroll: true });
+      note.classList.remove('flash'); void note.offsetWidth; note.classList.add('flash');
+    });
+  });
+  entry.notes.querySelectorAll('.note').forEach((n) => {
+    const cites = entry.answer.querySelectorAll(`.cite[data-ref="${n.dataset.rank}"]`);
+    n.addEventListener('mouseenter', () => cites.forEach((c) => c.classList.add('on')));
+    n.addEventListener('mouseleave', () => cites.forEach((c) => c.classList.remove('on')));
+  });
+}
+
+// ── Lightweight markdown → HTML ───────────────────────────
+// Groups consecutive lines into <p>, <ul> or <ol>; a blank line closes a paragraph.
+function renderAnswer(text) {
+  const UL = /^\s*[-*•]\s+/;
+  const OL = /^\s*\d+[.)]\s+/;
+  const out = [];
+  let kind = null, buf = [];
+
+  const flush = () => {
+    if (!buf.length) return;
+    if (kind === 'p') out.push(`<p>${buf.map(inline).join('<br>')}</p>`);
+    else out.push(`<${kind}>${buf.map((l) => `<li>${inline(l)}</li>`).join('')}</${kind}>`);
+    buf = []; kind = null;
   };
 
-  panel.appendChild(toggle);
-  panel.appendChild(content);
-  return panel;
+  String(text || '').trim().split('\n').forEach((line) => {
+    if (!line.trim()) { flush(); return; }
+    const k = UL.test(line) ? 'ul' : OL.test(line) ? 'ol' : 'p';
+    if (k !== kind) flush();
+    kind = k;
+    buf.push(k === 'ul' ? line.replace(UL, '') : k === 'ol' ? line.replace(OL, '') : line);
+  });
+  flush();
+  return out.join('');
 }
 
-function scrollToBottom() {
-  chatMessages.scrollTop = chatMessages.scrollHeight;
+function inline(s) {
+  let out = esc(s);
+  out = out.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, '$1<em>$2</em>');
+  // [Mənbə 1], [Mənbə 1, 2], [Mənbə 1, Mənbə 3] → superscript markers
+  out = out.replace(/\[\s*Mənbə[^\]]*\]/gi, (m) =>
+    (m.match(/\d+/g) || []).map((n) => `<a class="cite" data-ref="${n}">${n}</a>`).join('')
+  );
+  return out;
 }
 
-// ── Text formatting ───────────────────────────────────────
-function formatText(text) {
-  // Escape HTML first
-  let safe = escapeHtml(text);
-
-  // Bold: **text**
-  safe = safe.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-
-  // Newlines to <br>
-  safe = safe.replace(/\n/g, '<br>');
-
-  return safe;
-}
-
-function escapeHtml(str) {
-  return String(str)
+function esc(str) {
+  return String(str ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
