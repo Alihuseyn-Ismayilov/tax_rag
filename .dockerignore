@@ -1,0 +1,7 @@
+# Only app/, the Gemini index and requirements-app.txt go into the image.
+*
+!app/
+!data/db/chroma_gemini/
+!requirements-app.txt
+**/__pycache__
+.env*
