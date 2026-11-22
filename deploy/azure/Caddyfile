@@ -1,0 +1,12 @@
+# Caddy gets free Let's Encrypt HTTPS certificates for both hosts automatically.
+# Without your own domain use sslip.io names, e.g. tax.20-1-2-3.sslip.io
+# (20.1.2.3 = the VM's public IP). Set both names in .env.
+{$TAX_HOST} {
+	encode gzip
+	reverse_proxy tax_rag:8000
+}
+
+{$CREDIT_HOST} {
+	encode gzip
+	reverse_proxy credit:8000
+}

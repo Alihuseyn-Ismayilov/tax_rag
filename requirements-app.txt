@@ -1,0 +1,10 @@
+# Runtime dependencies for the deployed web app (used by the Dockerfile).
+# No torch / sentence-transformers: query embeddings come from the Gemini API.
+# requirements.txt is the full local environment (notebooks, e5 model, CUDA torch).
+chromadb==1.5.9
+google-genai==2.3.0
+fastapi==0.136.1
+uvicorn[standard]==0.47.0
+Jinja2==3.1.6
+pydantic==2.13.4
+python-dotenv==1.2.2

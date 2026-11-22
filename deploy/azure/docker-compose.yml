@@ -1,0 +1,37 @@
+# Both portfolio apps on one Azure for Students VM (B1s: 1 vCPU, 1 GiB RAM + swap).
+# Expected layout on the VM (setup.sh creates it):
+#   ~/apps/tax_rag                    <- this repo
+#   ~/apps/Home-Credit-Default-Risk   <- credit scoring repo
+# Run from this folder:  docker compose up -d --build
+services:
+  tax_rag:
+    build: ../..
+    restart: unless-stopped
+    env_file: .env            # GEMINI_API_KEY=... (not committed)
+    environment:
+      PORT: "8000"
+    mem_limit: 450m
+
+  credit:
+    build: ../../../Home-Credit-Default-Risk
+    restart: unless-stopped
+    environment:
+      PORT: "8000"
+    mem_limit: 450m
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file: .env            # TAX_HOST=..., CREDIT_HOST=...
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [tax_rag, credit]
+
+volumes:
+  caddy_data:
+  caddy_config:
