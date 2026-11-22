@@ -36,11 +36,11 @@ Both apps and Caddy (automatic HTTPS) run on one B1s VM through `deploy/azure/do
 
 1. In the Azure portal, create a VM: Ubuntu 24.04, size **B1s**, SSH key auth.
    Open inbound ports 22, 80 and 443. Set a budget alert on the subscription.
-2. Push both repos to GitHub. The setup script clones `main` by default.
-   Override with `TAX_BRANCH=... CREDIT_BRANCH=...`.
+2. Push both repos to GitHub. The setup script clones `deploy/server-setup` (tax_rag) and `deploy/docker` (scoring) by default.
+   Override with `TAX_BRANCH=... CREDIT_BRANCH=...`. tax_rag starts only after `COMPOSE_PROFILES=tax` is set in `.env`.
 3. On the VM:
    ```bash
-   curl -fsSLO https://raw.githubusercontent.com/<user>/tax_rag/main/deploy/azure/setup.sh
+   curl -fsSLO https://raw.githubusercontent.com/<user>/tax_rag/deploy/server-setup/deploy/azure/setup.sh
    bash setup.sh
    nano ~/apps/tax_rag/deploy/azure/.env    # GEMINI_API_KEY, TAX_HOST, CREDIT_HOST
    exit                                      # log back in so the docker group applies
