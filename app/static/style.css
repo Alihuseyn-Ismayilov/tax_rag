@@ -296,6 +296,19 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 .pending { color: var(--ink-3); font-style: italic; }
 
+/* Typewriter reveal (app.js → typeOut). Blocks stay out of flow until their first word lands. */
+.answer .tw-wait { display: none; }
+.answer.typing { cursor: default; }
+.tw-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 1px;
+  vertical-align: -.15em;
+  background: var(--red);
+  border-radius: 1px;
+}
+
 /* ── Sources ─────────────────────────────────────────────── */
 .notes { grid-column: 2; grid-row: 2; font-size: .85rem; line-height: 1.5; align-self: start; }
 .notes-head {
