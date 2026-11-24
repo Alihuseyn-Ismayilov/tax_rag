@@ -24,6 +24,7 @@ Routes:
 
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -38,7 +39,6 @@ from fastapi.templating import Jinja2Templates
 from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 load_dotenv()
@@ -51,19 +51,26 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DB_PATH         = Path("../data/db/chroma")
+# Index built by scripts/4g_embed_gemini.py. The older e5 index (data/db/chroma)
+# needs local torch + ~3 GB RAM; this one is queried through the Gemini API.
+DB_PATH         = Path("../data/db/chroma_gemini")
 COLLECTION_NAME = "taxes_az_qa"
 LOG_PATH        = Path("../data/logs/query_log.jsonl")
 
-EMBED_MODEL      = "intfloat/multilingual-e5-large"
-E5_QUERY_PREFIX  = "query: "
+EMBED_MODEL = "gemini-embedding-001"
+EMBED_DIM   = 768      # must match 4g_embed_gemini.py
 
 GEMINI_MODEL      = "gemini-2.5-flash"
 TOP_K             = 5
-DISTANCE_THRESHOLD = 0.5
+# Gemini distances: on-topic top-1 ≤ ~0.29, off-topic ≥ 0.33 (data/eval/compare_report.md).
+DISTANCE_THRESHOLD = 0.30
 MAX_OUTPUT_TOKENS  = 1024
 TEMPERATURE        = 0.2
 THINKING_BUDGET    = 0
+
+# Set SHOW_HISTORY=0 on a public deployment so /history does not show
+# visitors each other's questions.
+SHOW_HISTORY = os.environ.get("SHOW_HISTORY", "1") != "0"
 
 SYSTEM_PROMPT = """Siz Azərbaycan Respublikasının Dövlət Vergi Xidmətinin rəsmi \
 saytı olan taxes.gov.az-ın sual-cavab məlumat bazasına əsaslanan köməkçi \
@@ -86,31 +93,26 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 # ── Global resources (loaded once at startup) ─────────────────────────────────
-embed_model: SentenceTransformer = None
-collection: chromadb.Collection  = None
-gemini_client: genai.Client      = None
+collection: chromadb.Collection = None
+gemini_client: genai.Client     = None
 
 
 @app.on_event("startup")
 async def startup():
-    global embed_model, collection, gemini_client
+    global collection, gemini_client
 
-    log.info("Loading embedding model...")
-    embed_model = SentenceTransformer(EMBED_MODEL)
-    log.info(f"Embedding model ready — dim: {embed_model.get_sentence_embedding_dimension()}")
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set — add it to .env file")
+    gemini_client = genai.Client(api_key=api_key)
+    log.info(f"Gemini client ready — LLM: {GEMINI_MODEL}, embeddings: {EMBED_MODEL}")
 
     log.info("Connecting to ChromaDB...")
     db_client  = chromadb.PersistentClient(path=str(DB_PATH))
     collection = db_client.get_collection(name=COLLECTION_NAME)
     log.info(f"Collection '{COLLECTION_NAME}' — {collection.count():,} docs")
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set — add it to .env file")
-    gemini_client = genai.Client(api_key=api_key)
-    log.info(f"Gemini client ready — model: {GEMINI_MODEL}")
-
-    log.info("All resources loaded. Ready at http://localhost:8000")
+    log.info("All resources loaded.")
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -125,8 +127,6 @@ class Source(BaseModel):
     answer_date: str
     question:    str
     answer:      str
-    name:        str
-    email:       str
     source_url:  str
 
 
@@ -139,13 +139,25 @@ class AskResponse(BaseModel):
 
 
 # ── Pipeline functions ────────────────────────────────────────────────────────
-def embed_query(query: str) -> list[float]:
-    vec = embed_model.encode(
-        [E5_QUERY_PREFIX + query],
-        normalize_embeddings=True,
-        convert_to_numpy=True,
+def embed_query(query: str, retries: int = 3) -> list[float]:
+    config = types.EmbedContentConfig(
+        task_type="RETRIEVAL_QUERY",
+        output_dimensionality=EMBED_DIM,
     )
-    return vec[0].tolist()
+    for attempt in range(1, retries + 1):
+        try:
+            resp = gemini_client.models.embed_content(
+                model=EMBED_MODEL, contents=[query], config=config,
+            )
+            vec  = resp.embeddings[0].values
+            norm = math.sqrt(sum(v * v for v in vec))   # 768-dim output is not unit length
+            return [v / norm for v in vec]
+        except (errors.ClientError, errors.ServerError) as e:
+            if isinstance(e, errors.ClientError) and "429" not in str(e):
+                raise HTTPException(status_code=400, detail=str(e))
+            log.warning(f"Embedding API busy (attempt {attempt}/{retries})")
+            time.sleep(2 ** attempt)
+    raise HTTPException(status_code=503, detail="Embedding API unavailable after retries")
 
 
 def search(query: str) -> list[dict]:
@@ -166,8 +178,7 @@ def search(query: str) -> list[dict]:
             "distance":    round(distance, 4),
             "similarity":  round(1 - distance / 2, 4),
             "source_id":   meta["source_id"],
-            "name":        meta["name"],
-            "email":       meta["email"],
+            # The askers' name and e-mail stay in the index but are never returned.
             "chunk_type":  meta["chunk_type"],
             "answer_date": meta["answer_date"],
             "read_count":  meta["read_count"],
@@ -293,7 +304,7 @@ async def ask(body: AskRequest):
 @app.get("/history")
 async def history(n: int = 20):
     """Return last n queries from the log file."""
-    if not LOG_PATH.exists():
+    if not SHOW_HISTORY or not LOG_PATH.exists():
         return JSONResponse(content={"queries": []})
 
     with open(LOG_PATH, encoding="utf-8") as f:
@@ -309,7 +320,7 @@ async def history(n: int = 20):
 async def health():
     """Quick status check for all components."""
     status = {
-        "embed_model": embed_model is not None,
+        "embed_model": gemini_client is not None,
         "db":          collection is not None,
         "db_docs":     collection.count() if collection else 0,
         "llm":         gemini_client is not None,
@@ -324,7 +335,7 @@ async def about():
     return JSONResponse(content={
         "llm_model":          GEMINI_MODEL,
         "embed_model":        EMBED_MODEL,
-        "embed_dim":          embed_model.get_sentence_embedding_dimension() if embed_model else None,
+        "embed_dim":          EMBED_DIM,
         "collection":         COLLECTION_NAME,
         "db_docs":            collection.count() if collection else 0,
         "distance":           "cosine",

@@ -32,10 +32,10 @@ guessing.
 
 ```
                  ┌──────────────────── built once ────────────────────┐
- taxes.gov.az ─► scrape ─► clean ─► chunk ─► embed ("passage:") ─► ChromaDB
+ taxes.gov.az ─► scrape ─► clean ─► chunk ─► embed (RETRIEVAL_DOCUMENT) ─► ChromaDB
                                                                     │
                  ┌──────────────────── every question ──────────────┼─┐
- question ─► embed ("query:") ─► cosine search, top-5, distance ≤ 0.5 ◄┘ │
+ question ─► embed (RETRIEVAL_QUERY) ─► cosine search, top-5, threshold ◄┘ │
           ─► number hits as [Mənbə 1..n] ─► Gemini 2.5 Flash ─► answer + sources
                  └──────────────────────────────────────────────────────┘
 ```
@@ -45,9 +45,24 @@ guessing.
 | Scrape | Pages of the Q&A section are fetched with `requests` + BeautifulSoup: asker name, e-mail, ID, question, answer, date, read count, rating. | `scripts/scraper.ipynb` |
 | Clean | Records without an answer are dropped, text is trimmed, ID and metadata are parsed. 5,772 → 5,771 records. | `scripts/cleaning.ipynb` |
 | Chunk | Each record becomes one chunk `Sual: … / Cavab: …` if question + answer ≤ 1,500 characters. 3,549 chunks. | `scripts/3_chunk_simple.py` |
-| Embed | `intfloat/multilingual-e5-large` (1024-dim), `passage:` prefix, L2-normalised. | `scripts/4_embed.py` |
-| Index | ChromaDB persistent collection `taxes_az_qa`, HNSW with cosine distance. | `scripts/5_db.py` |
-| Answer | Query embedded with `query:` prefix → top-5 → drop hits with distance > 0.5 → context → Gemini. | `app/main.py`, `scripts/6_chatbot.py` |
+| Embed + index | `gemini-embedding-001` through the Gemini API (768-dim, L2-normalised) → ChromaDB collection `taxes_az_qa` in `data/db/chroma_gemini`, HNSW with cosine distance. | `scripts/4g_embed_gemini.py` |
+| Answer | Query embedded with task type `RETRIEVAL_QUERY` → top-5 → drop hits above the distance threshold → context → Gemini. | `app/main.py` |
+
+The first version used `intfloat/multilingual-e5-large` run locally (`scripts/4_embed.py`,
+`scripts/5_db.py`, index in `data/db/chroma`; the CLI `scripts/6_chatbot.py` still uses it).
+It needs torch and about 3 GB of RAM, which no free host offers, so the web app switched to
+API embeddings. `scripts/compare_embeddings.py` compares the two indexes; results are in
+`data/eval/compare_report.md`:
+
+| Index | hit@1 | hit@5 | MRR | Off-topic separation (top-1 distance) |
+|---|---|---|---|---|
+| e5 | 80% | 93% | 0.848 | on-topic ≤ 0.154 (p90), off-topic ≥ 0.185 |
+| Gemini | 80% | 93% | 0.853 | on-topic ≤ 0.206 (p90), off-topic ≥ 0.373 |
+
+Test set: 60 archive questions rewritten by Gemini as short user questions; a hit means
+the original record was retrieved. Retrieval quality is the same, and Gemini separates
+off-topic questions much more clearly, which lets the threshold reject them. With API
+embeddings the app uses about 180 MB of RAM.
 
 Generation settings: `gemini-2.5-flash`, temperature 0.2, max 1,024 output tokens,
 thinking disabled. The system prompt (Azerbaijani) tells the model to answer only in
@@ -64,13 +79,18 @@ live settings from the server:
 
 ## Quick start
 
-The ChromaDB index is committed in `data/db/chroma`, so you can run the app without
-rebuilding anything. It currently holds 3,558 vectors: 9 more than the current
-`chunks_embedded.json` (3,549), left over from an earlier build. Rebuilding the index
-(below) brings the two back in sync.
+The ChromaDB index is committed in `data/db/chroma_gemini`, so you can run the app without
+rebuilding anything.
 
-**Requirements:** Python 3.11, a [Gemini API key](https://aistudio.google.com/apikey),
-about 2.2 GB free disk for the embedding model (downloaded on first start).
+**Requirements:** Python 3.11 and a [Gemini API key](https://aistudio.google.com/apikey).
+The web app alone needs only `requirements-app.txt` (no torch):
+
+```bash
+pip install -r requirements-app.txt
+```
+
+The steps below install the full environment, needed for the notebooks, the e5 index
+and the CLI chatbot.
 
 ```bash
 git clone https://github.com/Alihuseyn-Ismayilov/tax_rag.git
@@ -117,12 +137,11 @@ cd app
 uvicorn main:app --reload --port 8000
 ```
 
-Open <http://localhost:8000>. The first start takes a while because
-`multilingual-e5-large` is downloaded and loaded.
+Open <http://localhost:8000>.
 
 ### Command-line chatbot
 
-The same pipeline without the UI, from the `scripts/` folder:
+The same pipeline without the UI, on the older e5 index, from the `scripts/` folder:
 
 ```bash
 cd scripts
@@ -176,10 +195,16 @@ in order from the `scripts/` folder:
    move the file to `data/scraped/raw_data.csv` (the path the next step reads).
 2. `cleaning.ipynb` — writes `data/processed/clean_data.csv`.
 3. `python 3_chunk_simple.py` — writes `data/processed/chunks_simple.json`.
-4. `python 4_embed.py` — writes `data/processed/chunks_embedded.json` (GPU recommended).
-5. `python 5_db.py` — loads the vectors into `data/db/chroma`.
+4. `python 4g_embed_gemini.py` — embeds the chunks through the Gemini API and builds
+   `data/db/chroma_gemini` (the index the web app uses). The free tier allows 1,000
+   embedded texts per day, so the 3,549 chunks take four daily runs; progress is cached
+   in `data/processed/chunks_embedded_gemini.json`, and each run continues where the last
+   one stopped. With billing enabled it finishes in minutes for well under $1.
 
-If you change `EMBED_MODEL`, change it in `4_embed.py`, `6_chatbot.py` and
+   Older e5 index (CLI chatbot): `python 4_embed.py` (GPU recommended), then
+   `python 5_db.py` → `data/db/chroma`.
+
+If you change `EMBED_MODEL` or `EMBED_DIM`, change them in `4g_embed_gemini.py` and
 `app/main.py` together; queries and documents must use the same model.
 
 ---
@@ -196,16 +221,22 @@ tax_rag/
 │   ├── scraper.ipynb        1. scrape taxes.gov.az
 │   ├── cleaning.ipynb       2. clean
 │   ├── 3_chunk_simple.py    3. chunk
-│   ├── 4_embed.py           4. embed (+ .ipynb version)
-│   ├── 5_db.py              5. build ChromaDB (+ .ipynb version)
-│   ├── 6_chatbot.py         CLI chatbot (+ .ipynb version)
+│   ├── 4g_embed_gemini.py   4. embed with Gemini + build the app's index
+│   ├── 4_embed.py           4. (e5) embed (+ .ipynb version)
+│   ├── 5_db.py              5. (e5) build ChromaDB (+ .ipynb version)
+│   ├── 6_chatbot.py         CLI chatbot, e5 index (+ .ipynb version)
+│   ├── compare_embeddings.py e5 vs Gemini retrieval comparison
 │   └── analyze_chunks.ipynb chunk-length analysis
 ├── data/
 │   ├── scraped/             raw scrape (csv, xlsx)
 │   ├── processed/           clean data, chunks, embeddings
-│   ├── db/chroma/           vector index
+│   ├── db/chroma_gemini/    vector index used by the web app
+│   ├── db/chroma/           older e5 index
+│   ├── eval/                comparison test set and report
 │   └── logs/                query log (/ask appends here)
-├── requirements.txt
+├── Dockerfile, heroku.yml   deployment
+├── requirements-app.txt     web app dependencies
+├── requirements.txt         full environment
 └── .env                     GEMINI_API_KEY (git-ignored)
 ```
 
@@ -213,14 +244,15 @@ tax_rag/
 
 ## Settings
 
-All in the config block at the top of `app/main.py` (mirrored in `scripts/6_chatbot.py`):
+All in the config block at the top of `app/main.py`:
 
 | Setting | Value | Meaning |
 |---|---|---|
-| `EMBED_MODEL` | `intfloat/multilingual-e5-large` | Query embedding model; must match the one used for the index. |
+| `EMBED_MODEL` | `gemini-embedding-001` | Query embedding model; must match the one used for the index. |
+| `EMBED_DIM` | 768 | Embedding size; must match the index. |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Answer model. |
 | `TOP_K` | 5 | Chunks retrieved per question. |
-| `DISTANCE_THRESHOLD` | 0.5 | Cosine distance cut-off; weaker matches are dropped. |
+| `DISTANCE_THRESHOLD` | 0.30 | Cosine distance cut-off; weaker matches are dropped. Calibrated on the test set: matching sources come in at ≤ 0.29, off-topic questions at ≥ 0.33. |
 | `TEMPERATURE` | 0.2 | Low, for factual answers. |
 | `MAX_OUTPUT_TOKENS` | 1024 | Answer length limit. |
 | `THINKING_BUDGET` | 0 | Gemini thinking mode off, for speed. |
@@ -237,5 +269,34 @@ All in the config block at the top of `app/main.py` (mirrored in `scripts/6_chat
 - **Answers are only as good as retrieval.** If the right answer is not among the top 5,
   the model will say it found nothing, or answer from a weaker match.
 - **The source data contains askers' names and e-mail addresses** as published on
-  taxes.gov.az. Both are stored in the index metadata and returned by `/ask`, but the
-  UI does not display them.
+  taxes.gov.az. The app's Gemini index does not store them; the older e5 index does,
+  but `/ask` never returns them.
+- **Free-tier quota.** Every question uses one embedding request and one generation
+  request; on the free Gemini tier the embedding quota is 1,000 per day.
+
+---
+
+## Deploy
+
+The image (`Dockerfile`) holds only the app, `data/db/chroma_gemini` and
+`requirements-app.txt`. It listens on `$PORT` and sets `SHOW_HISTORY=0`, so visitors do
+not see each other's questions. `GEMINI_API_KEY` must be set in the host's environment.
+
+### Heroku (container stack)
+
+```bash
+heroku login
+heroku create <app-name> --stack container
+heroku config:set GEMINI_API_KEY=<your key>
+git push heroku main
+```
+
+`heroku.yml` tells Heroku to build the `Dockerfile`. The index must be committed, since
+Heroku builds from the git repository.
+
+### Any Docker host (e.g. an Azure VM)
+
+```bash
+docker build -t tax-rag .
+docker run -d -p 80:8000 -e GEMINI_API_KEY=<your key> --restart unless-stopped tax-rag
+```
