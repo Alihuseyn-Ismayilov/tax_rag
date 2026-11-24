@@ -64,6 +64,7 @@ async function loadAbout() {
 
 // Back to the start screen: clear the conversation, show the cover, scroll to top.
 function goHome() {
+  activeTyper?.finish();
   entries.innerHTML = '';
   cover.hidden = false;
   setDrawer(false);
@@ -152,7 +153,7 @@ async function send() {
       throw new Error(msg);
     }
     const data = await res.json();
-    fillEntry(entry, data);
+    await fillEntry(entry, data);
     announce(`Cavab hazırdır. ${data.sources?.length || 0} mənbə.`);
     loadHistory();
   } catch (err) {
@@ -189,10 +190,10 @@ function buildEntry(no, query) {
   };
 }
 
-function fillEntry(entry, data) {
+async function fillEntry(entry, data) {
   const sources = data.sources || [];
   entry.answer.innerHTML = renderAnswer(data.answer);
-  entry.answer.querySelectorAll(':scope > *').forEach((n, i) => (n.style.animationDelay = i * 90 + 'ms'));
+  await typeOut(entry.answer);
 
   if (!sources.length) entry.notes.remove();
   else {
@@ -253,6 +254,93 @@ function wireCitations(entry) {
     n.addEventListener('mouseenter', () => cites.forEach((c) => c.classList.add('on')));
     n.addEventListener('mouseleave', () => cites.forEach((c) => c.classList.remove('on')));
   });
+}
+
+// ── Typewriter reveal ─────────────────────────────────────
+// The answer arrives whole; reveal the already-rendered HTML word by word so
+// markup (lists, bold, citation markers) is intact at every frame.
+// Pace adapts to length: short answers ~1.5 s, long ones capped near 2.6 s.
+let activeTyper = null;   // lets a new question or a click finish the current one instantly
+
+function typeOut(root) {
+  activeTyper?.finish();
+  if (reduceMotion.matches) return Promise.resolve();
+
+  // Collect units in document order: words of text nodes, and citation markers as atoms.
+  const units = [];
+
+  const walk = (node, block) => {
+    node.childNodes.forEach((n) => {
+      if (n.nodeType === Node.TEXT_NODE) {
+        const words = n.textContent.match(/\S+\s*|\s+/g) || [];
+        if (words.length) units.push({ kind: 'text', node: n, words, block });
+        n.textContent = '';
+      } else if (n.nodeType === Node.ELEMENT_NODE) {
+        if (n.classList.contains('cite')) { units.push({ kind: 'cite', el: n, block }); n.hidden = true; return; }
+        const isBlock = /^(P|LI|UL|OL)$/.test(n.tagName);
+        if (isBlock) { n.classList.add('tw-wait'); }
+        walk(n, isBlock ? n : block);
+      }
+    });
+  };
+  walk(root, null);
+
+  const total = units.reduce((s, u) => s + (u.kind === 'text' ? u.words.join('').length : 2), 0);
+  if (!total) return Promise.resolve();
+  const cps = Math.min(Math.max(total / 2.6, 220), 900);   // characters per second
+
+  const caret = document.createElement('span');
+  caret.className = 'tw-caret';
+  caret.setAttribute('aria-hidden', 'true');
+  root.classList.add('typing');
+
+  const show = (block) => {
+    for (let b = block; b && b !== root; b = b.parentElement) b.classList.remove('tw-wait');
+  };
+
+  let ui = 0, wi = 0, shown = 0, raf = 0, resolve;
+  const done = new Promise((r) => (resolve = r));
+
+  const step = (budget) => {
+    while (shown < budget && ui < units.length) {
+      const u = units[ui];
+      show(u.block);
+      if (u.kind === 'cite') {
+        u.el.hidden = false;
+        u.el.after(caret);
+        shown += 2; ui += 1;
+        continue;
+      }
+      const w = u.words[wi++];
+      u.node.textContent += w;
+      u.node.after(caret);
+      shown += w.length;
+      if (wi >= u.words.length) { ui += 1; wi = 0; }
+    }
+  };
+
+  const finish = () => {
+    if (activeTyper !== typer) return;
+    activeTyper = null;
+    cancelAnimationFrame(raf);
+    step(Infinity);
+    caret.remove();
+    root.classList.remove('typing');
+    root.removeEventListener('click', finish);
+    resolve();
+  };
+  const typer = { finish };
+  activeTyper = typer;
+  root.addEventListener('click', finish);   // click to skip
+
+  const start = performance.now();
+  const tick = (now) => {
+    step(((now - start) / 1000) * cps);
+    if (ui >= units.length) finish();
+    else raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+  return done;
 }
 
 // ── Lightweight markdown → HTML ───────────────────────────

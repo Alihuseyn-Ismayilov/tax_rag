@@ -62,8 +62,11 @@ EMBED_DIM   = 768      # must match 4g_embed_gemini.py
 
 GEMINI_MODEL      = "gemini-2.5-flash"
 TOP_K             = 5
-# Gemini distances: on-topic top-1 ≤ ~0.29, off-topic ≥ 0.33 (data/eval/compare_report.md).
-DISTANCE_THRESHOLD = 0.30
+# Gemini cosine distances (top-1). Azerbaijani on-topic ≈ 0.15–0.23; Latin-transliterated
+# Azerbaijani and Russian/English tax questions land 0.25–0.33; off-topic chatter
+# ("salam", recipes, weather — in any language) starts at ≈ 0.375.
+# 0.30 silently dropped every Russian question, so the LLM answered "nothing found".
+DISTANCE_THRESHOLD = 0.35
 MAX_OUTPUT_TOKENS  = 1024
 TEMPERATURE        = 0.2
 THINKING_BUDGET    = 0
@@ -77,13 +80,17 @@ saytı olan taxes.gov.az-ın sual-cavab məlumat bazasına əsaslanan köməkçi
 chatbotsunuz.
 
 Qaydalar:
-1. Yalnız Azərbaycan dilində cavab verin.
-2. Cavabınızı YALNIZ verilmiş kontekst məlumatlarına əsaslandırın.
-3. Kontekstdə cavab yoxdursa — "Bu sual barədə məlumat bazamda məlumat tapılmadı." \
-deyin. Heç vaxt uydurmayın.
-4. Mənbə nömrəsinə istinad edin (məsələn: [Mənbə 1]).
-5. Vergi Məcəlləsinə istinadlar varsa, onları cavabda qoruyun.
-6. Qısa və aydın cavab verin."""
+1. Yalnız Azərbaycan dilində cavab verin, sual hansı dildə (rus, ingilis, latın \
+hərfləri ilə yazılmış Azərbaycan dili) verilməsindən asılı olmayaraq.
+2. Cavabınızı YALNIZ verilmiş kontekst məlumatlarına əsaslandırın. Sual başqa \
+dildədirsə, onun mənasını kontekstdəki suallarla müqayisə edin.
+3. Kontekstdə sualın mövzusuna aid məlumat varsa, hətta tam cavab olmasa belə, \
+mövcud olanı ümumiləşdirin və hansı hissənin aydın olmadığını qeyd edin.
+4. Yalnız kontekstdə sualın mövzusuna heç bir aidiyyəti olan məlumat yoxdursa — \
+"Bu sual barədə məlumat bazamda məlumat tapılmadı." deyin. Heç vaxt uydurmayın.
+5. Mənbə nömrəsinə istinad edin (məsələn: [Mənbə 1]).
+6. Vergi Məcəlləsinə istinadlar varsa, onları cavabda qoruyun.
+7. Qısa və aydın cavab verin."""
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI(title="Vergi Chatbotu", docs_url=None, redoc_url=None)
